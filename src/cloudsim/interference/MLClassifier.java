@@ -90,6 +90,14 @@ public class MLClassifier {
 		// Log.printLine("=======" + hostname);
 		// usar R para classificar ....
 
+		String envFolder = System.getenv("INTP_R_FOLDER");
+		String envLibPaths = System.getenv("INTP_R_LIBPATHS");
+		if (envFolder != null && !envFolder.isEmpty()) {
+			project_folder = envFolder.endsWith("/") ? envFolder : envFolder + "/";
+			if (envLibPaths != null && !envLibPaths.isEmpty()) {
+				re.eval(".libPaths('" + envLibPaths + "')");
+			}
+		}
 		if (hostname.equals("vinicius-desktop")) {
 			project_folder = "/home/vinicius/git/CloudSimInterference/R/"; // ubuntu
 			re.eval(".libPaths('/home/vinicius/R/x86_64-pc-linux-gnu-library/3.6')"); // ubuntu

@@ -67,7 +67,14 @@ public class xxIntExample {
 	 * Startup delay for VMs and the containers are mentioned here.
 	 */
 	static final double CONTAINER_STARTTUP_DELAY = 0.4;// the amount is in seconds
-	static final double VM_STARTTUP_DELAY = 100;// the amoun is in seconds
+	// At the committed 100 s, with the horizon capped at 119, only 19 of the 120
+	// trace samples are post-startup -- the placement is scored on a 19 s tail in
+	// which no cloudlet completes (CLOUDLET_LENGTH 60000 at VM_MIPS 100 needs
+	// 600 s). We are not studying VM boot, so the delay buys nothing and costs
+	// most of the trace. Parameterised to sweep it; default is the committed 100
+	// so banked comparisons stay valid.
+	static final double VM_STARTTUP_DELAY =
+			Double.parseDouble(System.getProperty("iada.vmStartup", "100"));// the amoun is in seconds
 
 	/**
 	 * The available virtual machine types along with the specs.
@@ -102,8 +109,14 @@ public class xxIntExample {
 	 * population can also be different from cloudlet's population.
 	 */
 
-	static final int NUMBER_HOSTS = 12; //reduced for the per-tier IDI sim on our workloads
-	static final int NUMBER_VMS = 12;
+	// Read from the properties the drivers already pass (run-iada-experiment.sh
+	// sets -Diada.hosts/-Diada.vms). While these were compile-time constants the
+	// flags were inert: PM_COUNT shaped input.txt while the datacenter kept
+	// building 12 hosts regardless, so a sweep leg would have produced a number
+	// instead of an error. Defaults are the committed 12, so nothing moves until
+	// a sweep asks it to.
+	static final int NUMBER_HOSTS = Integer.getInteger("iada.hosts", 12); //reduced for the per-tier IDI sim on our workloads
+	static final int NUMBER_VMS = Integer.getInteger("iada.vms", NUMBER_HOSTS);
 	static final int NUMBER_CLOUDLETS = 192; // load cap; container/vm lists adapt to actual loaded count
 
 	/**

@@ -1103,7 +1103,14 @@ public class IntContainerDataCenter extends SimEntity {
 		List<Integer> nMig = new ArrayList<Integer>();
 
 		List<Solution> solutionList1 = new ArrayList<Solution>(); // adapt
-		int interval = 600, start = 1, end = 0, total = 119, count = 1; // our campaign traces are 120 samples (idx 0..119); sim horizon stays < trace length
+		// `total` must stay strictly below the trace length or getIntByLine walks
+		// off the end -- that coupling, held as a bare literal, is what produced
+		// the "Index 120 out of bounds for length 120" crash when 7200-sample
+		// bundled traces were swapped for 120-sample campaign ones. Keeping it a
+		// property means a future trace length is a flag, not a source edit and
+		// another afternoon in a stack trace. Default 119 = the committed value.
+		int interval = 600, start = 1, end = 0, count = 1;
+		int total = Integer.getInteger("iada.horizon", 119); // our campaign traces are 120 samples (idx 0..119); sim horizon stays < trace length
 
 		Solution nextSolution = new Solution();
 		// find the best intervals to make placement decisions.

@@ -47,10 +47,18 @@ public class MLCResult {
 		return this.result.get("regime");
 	}
 
+	// Ablation switch. Tier B differs from T1/A in two ways at once: a 15-metric
+	// fingerprint AND a sixth multiplicative term in the cost. That confounds
+	// "the richer fingerprint places better" with "a sixth multiplier moves the
+	// cost scale". -Diada.regime=off keeps B's classifier and drops only the
+	// extra term, which separates the two. Default on = committed behaviour.
+	private static final boolean REGIME_ON =
+			!"off".equalsIgnoreCase(System.getProperty("iada.regime", "on"));
+
 	public double getCloudletCost() {
 		double cost = 0;
 		cost = Degradation.getCpu(getCpu()) * Degradation.getMem(getMemory()) * Degradation.getDisk(getDisk()) * Degradation.getCache(getCache()) * Degradation.getNet(getNetwork());
-		if (getRegime() != null) cost *= Degradation.getRegime(getRegime());  // B only
+		if (REGIME_ON && getRegime() != null) cost *= Degradation.getRegime(getRegime());  // B only
 		//Log.printLine("CPU: "+getCpu()+" Mem: "+getMemory()+" Disk: "+getDisk()+" Cache: "+getCache()+" Net: "+getNetwork());
 
 

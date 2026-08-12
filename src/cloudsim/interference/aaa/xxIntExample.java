@@ -56,7 +56,9 @@ public class xxIntExample {
 	static final boolean ENABLE_OUTPUT = true;
 	static final boolean OUTPUT_CSV = false;
 	static final double SCHEDULING_INTERVAL = 1.0D;
-	static final double SIMULATION_LIMIT = 119.0D;// our campaign traces are 120 samples; cap below that to avoid indexing past trace end (bundled traces were 7200)
+	// Must stay in lockstep with -Diada.horizon (IntContainerDataCenter):
+	// both cap trace indexing, so a longer-trace run needs both raised.
+	static final double SIMULATION_LIMIT = Double.parseDouble(System.getProperty("iada.simLimit", "119"));// our campaign traces are 120 samples; cap below that to avoid indexing past trace end (bundled traces were 7200)
 	/**
 	 * Cloudlet specs
 	 */

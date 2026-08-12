@@ -42,12 +42,18 @@ public class MLCResult {
 		return this.result.get("disk");
 	}
 
+	// Approach B's 6th class; null for T1/A (5-class) — guarded in getCloudletCost.
+	public String getRegime() {
+		return this.result.get("regime");
+	}
+
 	public double getCloudletCost() {
 		double cost = 0;
 		cost = Degradation.getCpu(getCpu()) * Degradation.getMem(getMemory()) * Degradation.getDisk(getDisk()) * Degradation.getCache(getCache()) * Degradation.getNet(getNetwork());
-		//Log.printLine("CPU: "+getCpu()+" Mem: "+getMemory()+" Disk: "+getDisk()+" Cache: "+getCache()+" Net: "+getNetwork());			
-		
-		
+		if (getRegime() != null) cost *= Degradation.getRegime(getRegime());  // B only
+		//Log.printLine("CPU: "+getCpu()+" Mem: "+getMemory()+" Disk: "+getDisk()+" Cache: "+getCache()+" Net: "+getNetwork());
+
+
 		return cost>1 ? cost : 1;
 		
 	}

@@ -1103,7 +1103,7 @@ public class IntContainerDataCenter extends SimEntity {
 		List<Integer> nMig = new ArrayList<Integer>();
 
 		List<Solution> solutionList1 = new ArrayList<Solution>(); // adapt
-		int interval = 600, start = 1, end = 0, total = 7200, count = 1;
+		int interval = 600, start = 1, end = 0, total = 119, count = 1; // our campaign traces are 120 samples (idx 0..119); sim horizon stays < trace length
 
 		Solution nextSolution = new Solution();
 		// find the best intervals to make placement decisions.
@@ -1134,31 +1134,12 @@ public class IntContainerDataCenter extends SimEntity {
 			// sending cloudletTraces list to R function
 			// intervals = MLC.getIntervalsOCPM(cloudletTraces, start, total);
 
-			// manual
+			// manual intervals retargeted to our 120-sample traces: placement
+			// period = 20s -> decisions at 20/40/60/80/100 + the last at `total`
+			// (119). get(1)=20 sets `interval`; nextInterval is never advanced so
+			// only get(1) is read. Keeps every trace access < 120.
 			intervals.add(1);
-			intervals.add(311);
-			intervals.add(622);
-			intervals.add(940);
-			intervals.add(1267);
-			intervals.add(1575);
-			intervals.add(1878);
-			intervals.add(2183);
-			intervals.add(2491);
-			intervals.add(2812);
-			intervals.add(3130);
-			intervals.add(3448);
-			intervals.add(3758);
-			intervals.add(4070);
-			intervals.add(4371);
-			intervals.add(4678);
-			intervals.add(4982);
-			intervals.add(5287);
-			intervals.add(5591);
-			intervals.add(5902);
-			intervals.add(6217);
-			intervals.add(6534);
-			intervals.add(6850);
-			intervals.add(7164);
+			intervals.add(20);
 			// print found intervals
 			// for (int i = 0; i < intervals.size(); i++) {
 			// System.out.println(intervals.get(i));

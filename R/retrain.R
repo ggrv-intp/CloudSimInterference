@@ -45,7 +45,8 @@ parse_args <- function(argv) {
     cv_folds     = 5L,
     cv_repeats   = 10L,
     seed         = 42L,
-    dry_run      = FALSE
+    dry_run      = FALSE,
+    tier         = "T1"
   )
   i <- 1
   while (i <= length(argv)) {
@@ -57,6 +58,7 @@ parse_args <- function(argv) {
       "--cv-folds"     = { opt$cv_folds     <- as.integer(argv[[i + 1]]); i <- i + 2 },
       "--cv-repeats"   = { opt$cv_repeats   <- as.integer(argv[[i + 1]]); i <- i + 2 },
       "--seed"         = { opt$seed         <- as.integer(argv[[i + 1]]); i <- i + 2 },
+      "--tier"         = { opt$tier         <- argv[[i + 1]]; i <- i + 2 },
       "--dry-run"      = { opt$dry_run      <- TRUE;                       i <- i + 1 },
       "-h"             = { opt$help         <- TRUE;                       i <- i + 1 },
       "--help"         = { opt$help         <- TRUE;                       i <- i + 1 },
@@ -112,6 +114,23 @@ LEGACY_FILES <- c(
 # Per-class column index used by predict_<class>.kmeans for the
 # "hig/mod/low" level assignment. Must match upstream R/kmeans.R.
 LEVEL_COL <- list(cpu = 7L, mem = 4L, disk = 3L, net = 1L, cache = 6L)
+
+# Approach B: full 15-metric fingerprint + a 6th "regime" (oversubscription)
+# class. Level columns pick each class's discriminating VM-AVAILABLE metric
+# (canonical mbw/llcocc read 0 in a guest): mem->membw_est(10), cache->llcmr(5),
+# regime->schedlat(8); cpu/disk/net keep their canonical positions.
+if (identical(opt$tier, "B")) {
+  FEATURES <- c("netp", "nets", "blk", "mbw", "llcmr", "llcocc", "cpu",
+                "schedlat", "psi_mem", "membw_est", "psi_io", "schedthr",
+                "steal", "psp", "idle_preempt")
+  CLASSES  <- c("cpu", "mem", "disk", "net", "cache", "regime")
+  LEGACY_FILES <- c("cpu100.csv" = "cpu", "memory100.csv" = "mem",
+                    "disk100.csv" = "disk", "net100.csv" = "net",
+                    "cache100.csv" = "cache", "regime100.csv" = "regime")
+  SUBDIR_TO_CLASS <- c(SUBDIR_TO_CLASS, "regime" = "regime")
+  LEVEL_COL <- list(cpu = 7L, mem = 10L, disk = 3L, net = 1L,
+                    cache = 5L, regime = 8L)
+}
 
 # ─── dataset loading ─────────────────────────────────────────────────────────
 read_meyer_csv <- function(path, label) {
@@ -280,10 +299,10 @@ rand_index_for_kmeans <- function(total, km, k) {
     if (length(unique(sub[, col_idx])) < k) {
       per_class[[cls]] <- NA_real_; next
     }
-    quant <- as.integer(cut(sub[, col_idx],
-                            breaks = quantile(sub[, col_idx],
-                                              probs = seq(0, 1, length.out = k + 1),
-                                              na.rm = TRUE),
+    brks <- unique(quantile(sub[, col_idx],
+                            probs = seq(0, 1, length.out = k + 1), na.rm = TRUE))
+    if (length(brks) < 2) { per_class[[cls]] <- NA_real_; next }  # zero-skewed col
+    quant <- as.integer(cut(sub[, col_idx], breaks = brks,
                             include.lowest = TRUE, labels = FALSE))
     per_class[[cls]] <- rand(quant, km[[cls]]$cluster)
   }
@@ -315,11 +334,9 @@ save_artifacts <- function(svm_model, km, output_dir, dry_run) {
     }
   }
   do_save("svm_model.rda", svm_model,    "modelo_svm")
-  do_save("cpuk.rda",      km[["cpu"]],  "cl_cpu")
-  do_save("memk.rda",      km[["mem"]],  "cl_mem")
-  do_save("diskk.rda",     km[["disk"]], "cl_disk")
-  do_save("netk.rda",      km[["net"]],  "cl_net")
-  do_save("cachek.rda",    km[["cache"]],"cl_cache")
+  # file names are uniformly <class>k.rda (cpu->cpuk ... regime->regimek);
+  # var names cl_<class> match the inference-path load() in kmeans.R.
+  for (cls in CLASSES) do_save(paste0(cls, "k.rda"), km[[cls]], paste0("cl_", cls))
 }
 
 # ─── Driver ──────────────────────────────────────────────────────────────────
@@ -352,4 +369,4 @@ cat(sprintf("  (paper aggregate Rand Index: ~0.82)\n\n"))
 
 save_artifacts(svm_model, km_models, opt$output_dir, opt$dry_run)
 
-log_msg("done — six .rda files written under %s", normalizePath(opt$output_dir))
+log_msg("done — %d .rda files written under %s", length(CLASSES) + 1L, normalizePath(opt$output_dir))

@@ -56,7 +56,7 @@ public class xxIntExample {
 	static final boolean ENABLE_OUTPUT = true;
 	static final boolean OUTPUT_CSV = false;
 	static final double SCHEDULING_INTERVAL = 1.0D;
-	static final double SIMULATION_LIMIT = 99999999999.0D;// 601.0D;
+	static final double SIMULATION_LIMIT = 119.0D;// our campaign traces are 120 samples; cap below that to avoid indexing past trace end (bundled traces were 7200)
 	/**
 	 * Cloudlet specs
 	 */
@@ -102,9 +102,9 @@ public class xxIntExample {
 	 * population can also be different from cloudlet's population.
 	 */
 
-	static final int NUMBER_HOSTS = 96; //initial creation (need to fix)
-	static final int NUMBER_VMS = 96;
-	static final int NUMBER_CLOUDLETS = 192;
+	static final int NUMBER_HOSTS = 12; //reduced for the per-tier IDI sim on our workloads
+	static final int NUMBER_VMS = 12;
+	static final int NUMBER_CLOUDLETS = 192; // load cap; container/vm lists adapt to actual loaded count
 
 	/**
 	 * The cloudlet list.
@@ -230,7 +230,9 @@ public class xxIntExample {
 			// Log.print("\n");
 			// }
 
-			containerList = createContainerList(brokerId, NUMBER_CLOUDLETS);
+			// match container count to the actually-loaded cloudlets (our trees
+			// carry fewer than NUMBER_CLOUDLETS) so subList(0, size) below is valid.
+			containerList = createContainerList(brokerId, cloudletList.size());
 			vmList = createVmList(brokerId, NUMBER_VMS);
 			/**
 			 * 10- The address for logging the statistics of the VMs, containers in the data
@@ -506,6 +508,7 @@ public class xxIntExample {
 
 		java.io.File inputFolder1 = new java.io.File(inputFolderName);
 		java.io.File[] files1 = inputFolder1.listFiles();
+		Arrays.sort(files1); // deterministic cross-subdir cloudlet order (fair cross-tier compare)
 		// Log.printLine("======== "+files1.length);
 		int createdCloudlets = 0;
 		for (java.io.File aFiles1 : files1) {

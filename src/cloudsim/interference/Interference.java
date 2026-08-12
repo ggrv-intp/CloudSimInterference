@@ -60,7 +60,7 @@ public class Interference {
 
 			br = new BufferedReader(new FileReader(csvFile));
 			while ((line = br.readLine()) != null) {
-				int[] aux = new int[7];
+				int[] aux = new int[15];  // widen for Approach B 15-metric traces; 7-col traces fill the first 7 (fill loop is i<split.length)
 
 				// use comma as separator
 				String[] aux1 = line.split(";");

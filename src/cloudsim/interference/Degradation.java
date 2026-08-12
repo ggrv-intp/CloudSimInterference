@@ -13,6 +13,7 @@ public class Degradation {
 	public static HashMap<String, Double> deg_disk = new HashMap<String, Double>();
 	public static HashMap<String, Double> deg_cache = new HashMap<String, Double>();
 	public static HashMap<String, Double> deg_net = new HashMap<String, Double>();
+	public static HashMap<String, Double> deg_regime = new HashMap<String, Double>();
 
 	
 	
@@ -59,6 +60,20 @@ public class Degradation {
 		deg_net.put("hig", 1.62);
 
 		return deg_net.get(level);
+	}
+
+	// Approach B's oversubscription "regime" class. Calibrated from the W5
+	// victim-delta study (results/p2-15metric-xdeploy-1of3-w5): regime/sched-
+	// pressure interference, when present, saturates (Cliff's |delta|->1 for
+	// schedlat/membw_est primaries), so the multipliers are strong — above mem,
+	// just under disk. abs<0.147 low<0.33 mod<0.474 hig>=0.474 (|cliffs| bins).
+	public static double getRegime(String level) {
+		deg_regime.put("abs", 1.00);
+		deg_regime.put("low", 1.20);
+		deg_regime.put("mod", 1.55);
+		deg_regime.put("hig", 1.95);
+
+		return deg_regime.get(level);
 	}
 
 	

@@ -133,7 +133,14 @@ public class IntContainerDataCenter extends SimEntity {
 		Log.printLine("\nself re-score, full window (this tier's own classifier, same placement, "
 				+ "jsa-repo-fix-brief Phase 3.2) :\n");
 		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostSelfFullWindow()));
-		Log.printLine("\noracle re-score, full window (tier B classifier, same placement, "
+		// Reference label derived from the oracle R folder, not hardcoded to
+		// "tier B": the 3x3 placement-tier x reference-classifier matrix (S15)
+		// re-scores with the T1 and A classifiers as the reference too. The
+		// parser keys on the literal "oracle re-score" prefix only, never on
+		// the tier name, so this text is free to vary per run.
+		String refDir = rFolder.endsWith("/") ? rFolder.substring(0, rFolder.length() - 1) : rFolder;
+		String refLabel = new java.io.File(refDir).getName();
+		Log.printLine("\noracle re-score, full window (tier " + refLabel + " classifier, same placement, "
 				+ "jsa-repo-fix-brief Phase 3.2) :\n");
 		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostOracle()));
 	}

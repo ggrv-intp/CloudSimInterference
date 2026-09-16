@@ -33,6 +33,77 @@ public class IntContainerDataCenter extends SimEntity {
 
 	private MLClassifier MLC = new MLClassifier(); // adapt
 	private MLCResult MLCR = new MLCResult(); // adapt
+
+	// -Diada.oracleLabels=on (jsa-repo-fix-brief Phase 3.2): post-hoc re-score
+	// a CONVERGED solution with one common classifier (tier B's, the richest
+	// fingerprint), fed each cloudlet's full 15-metric trace regardless of
+	// which tier's own (narrower) classifier actually drove the search. The
+	// search itself, and every number it already reports, is untouched --
+	// this only adds a second, independent total via Solution's parallel
+	// oracleCost/getTotalInterferenceCostOracle.
+	//
+	// JRI/R allows only ONE Rengine per JVM process -- a second
+	// `new MLClassifier(otherFolder)` throws "R is already initialized" the
+	// instant its constructor tries to start a second Rengine (confirmed by
+	// running it: the simulation itself completed and printed its normal
+	// idi numbers, then crashed on this exact line). So this reuses the
+	// SAME MLC instance/Rengine the whole run already has, repointing its R
+	// folder to the oracle's (tier B) folder for this call only, then
+	// restoring the tier's own folder immediately after -- oracleRescore
+	// runs once, after the search is fully done, so nothing else needs MLC
+	// mid-swap. Lazily initialized so a run with the flag off pays zero cost.
+	private static final boolean ORACLE_LABELS_ON =
+			"on".equalsIgnoreCase(System.getProperty("iada.oracleLabels", "off"));
+	private java.util.List<java.io.File> oracleTraceFiles = null;
+
+	private void oracleRescore(Solution sol) {
+		if (!ORACLE_LABELS_ON) return;
+		String rFolder = System.getProperty("iada.oracleRFolder");
+		if (rFolder == null || rFolder.isEmpty()) {
+			Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleRFolder=<path to tier B's R folder>");
+			return;
+		}
+		if (oracleTraceFiles == null) {
+			String dir = System.getProperty("iada.oracleTreeDir");
+			if (dir == null || dir.isEmpty()) {
+				Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleTreeDir=<path to the oracle (tier B) source tree>");
+				return;
+			}
+			// Same two-level Arrays.sort() cloudlet ordering xxIntExample uses to
+			// build cloudletList in the first place ("deterministic cross-subdir
+			// cloudlet order (fair cross-tier compare)") -- cloudlet N here is
+			// guaranteed to be the SAME (workload, pattern) as cloudlet N in
+			// whichever tier's own tree actually drove this run, by that same
+			// design guarantee, not by any path-string matching of our own.
+			oracleTraceFiles = new java.util.ArrayList<java.io.File>();
+			java.io.File root = new java.io.File(dir);
+			java.io.File[] subdirs = root.listFiles();
+			java.util.Arrays.sort(subdirs);
+			for (java.io.File sub : subdirs) {
+				java.io.File[] files = sub.listFiles();
+				java.util.Arrays.sort(files);
+				for (java.io.File f : files) oracleTraceFiles.add(f);
+			}
+		}
+		String ownFolder = MLC.getProjectFolder();
+		MLC.setProjectFolder(rFolder);
+		try {
+			for (int clId = 1; clId <= sol.getSize(); clId++) {
+				if (clId - 1 >= oracleTraceFiles.size()) {
+					Log.printLine("[oracleRescore] cloudlet " + clId + " has no oracle trace counterpart (tree has "
+							+ oracleTraceFiles.size() + " traces) -- skipped");
+					continue;
+				}
+				Interference oracleInterf = new Interference(oracleTraceFiles.get(clId - 1).getAbsolutePath());
+				MLCResult r = MLC.getMLClass(oracleInterf, 0, oracleInterf.getIntLength());
+				sol.setOracleCost(clId, r.getCloudletCost());
+			}
+		} finally {
+			MLC.setProjectFolder(ownFolder); // restore, even though nothing else uses MLC after this call today
+		}
+		Log.printLine("\noracle re-score (tier B classifier, same placement, jsa-repo-fix-brief Phase 3.2) :\n");
+		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostOracle()));
+	}
 	private List<IntContainerCloudlet> cloudletList; // adapt
 	private boolean classify = false; // adapt
 	private List<Solution> solutionList = new ArrayList<Solution>(); // adapt
@@ -1259,6 +1330,7 @@ public class IntContainerDataCenter extends SimEntity {
 						.printDouble(solutionList.get(i).getTotalInterferenceCost() + (nMig.get(i - 1) * migvalue))); // interference
 																														// index
 			}
+			oracleRescore(solutionList.get(solutionList.size() - 1));
 		}
 
 		// Even Scheduler
@@ -1280,6 +1352,7 @@ public class IntContainerDataCenter extends SimEntity {
 				Log.printConcatLine(util.printDouble(solutionList.get(i).getTotalInterferenceCost()));
 
 			}
+			oracleRescore(solutionList.get(solutionList.size() - 1));
 
 		}
 
@@ -1290,35 +1363,61 @@ public class IntContainerDataCenter extends SimEntity {
 			// not change
 			// this solution uses SimulatedAnnealing algorithm
 
-			// analysis interval (first)
+			// analysis interval (first) -- clamped to the trace horizon (jsa-repo-
+			// fix-brief Phase 4 follow-up). The hardcoded interval=600 assumed
+			// traces at least that long; this campaign's traces are 120 samples
+			// (total=119). An unclamped end=600 walked off the end of every
+			// Interference buffer (IndexOutOfBoundsException at getIntByLine,
+			// size=120) -- CIAPA was never reachable at runtime before this
+			// session's -Diada.approach fix, so this was never hit before.
+			//
+			// A first cut just clamped end to total, which avoided the crash but
+			// made interval 1 consume the ENTIRE horizon, leaving nothing for
+			// interval 2 -- and interval 2 is where Placement.run(..., "SA")
+			// actually invokes the SA search; interval 1 only ever calls
+			// fillInitialSolution (an unoptimized initial placement). That first
+			// cut silently reduced CIAPA to "report the RR-equivalent initial
+			// placement," never exercising the SA search CIAPA is meant to
+			// contribute as a baseline. Fixed properly here: when the trace is
+			// shorter than the designed interval, interval 1 takes a single
+			// sample (mirroring IASA's own smallest interval, {1,20} -- not an
+			// invented split ratio) so interval 2 gets essentially the whole
+			// horizon to actually search over. Traces >= 600 samples are
+			// unaffected (interval 1 stays the full 600-sample window).
 			interval = 600;
-			end += interval;
+			end = (total > interval) ? end + interval : Math.min(start + 1, total);
 
 			Log.printLine(algorithm + " Intervalo1: " + start + " - " + end);
 			solutionList.add(fillInitialSolution(start, end, interval, total));
 
 			solutionList.get(solutionList.size() - 1).print();
 
-			start += interval;
+			start = end;
 
-			// Next interval (until the end)
-			end = total;
+			// Next interval (until the end) -- guarded for the degenerate case
+			// where interval 1 already consumed the whole horizon (only possible
+			// if total <= 1 above). CIAPA's own framing ("there are only one
+			// interval to analyze data, after that the placement does not
+			// change") describes traces long enough that interval 2 is where all
+			// the actual optimization happens, which is the normal path here.
+			// EVEN's single RR placement, rather than crashing on an empty or
+			// out-of-bounds second window.
+			if (start < total) {
+				end = total;
 
-			Log.printLine(algorithm + " Intervalo3: " + start + " - " + end);
-			nextSolution = Placement.run(solutionList.get(solutionList.size() - 1), algorithm).copy();
-			solutionList.add(classifier(nextSolution, start, end, interval, total));
+				Log.printLine(algorithm + " Intervalo3: " + start + " - " + end);
+				nextSolution = Placement.run(solutionList.get(solutionList.size() - 1), algorithm).copy();
+				solutionList.add(classifier(nextSolution, start, end, interval, total));
 
-			solutionList.get(solutionList.size() - 1).print();
+				solutionList.get(solutionList.size() - 1).print();
 
-			// find out how many migrations were done
-			Log.printLine(solutionList.get(solutionList.size() - 1)
-					.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
-			nMig.add(solutionList.get(solutionList.size() - 1)
-					.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+				// find out how many migrations were done
+				Log.printLine(solutionList.get(solutionList.size() - 1)
+						.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+				nMig.add(solutionList.get(solutionList.size() - 1)
+						.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+			}
 
-			
-			
-			
 			Log.printLine("Algorithm: " + algorithm);
 			for (int i = 0; i < solutionList.size(); i++) {
 				// Log.printLine((i+1) + " - "+algorithm+" " +
@@ -1344,7 +1443,8 @@ public class IntContainerDataCenter extends SimEntity {
 						.printDouble(solutionList.get(i).getTotalInterferenceCost() + (nMig.get(i - 1) * migvalue))); // interference
 																														// index
 			}
-			
+			oracleRescore(solutionList.get(solutionList.size() - 1));
+
 		}
 
 		long totalTime = System.currentTimeMillis() - startT;

@@ -70,6 +70,19 @@ public class MLClassifier {
 	// Rengine re = new Rengine(new String[] { "--no-save" }, false, null);
 	String project_folder = null;
 
+	// JRI/R only supports ONE Rengine per JVM process -- a second
+	// `new MLClassifier(otherFolder)` throws "R is already initialized"
+	// inside the Rengine constructor. So a common-classifier oracle re-score
+	// (jsa-repo-fix-brief Phase 3.2) can't use a second instance; it must
+	// reuse this one's existing Rengine, repointed at a different R folder.
+	public String getProjectFolder() {
+		return project_folder;
+	}
+
+	public void setProjectFolder(String folder) {
+		project_folder = folder.endsWith("/") ? folder : folder + "/";
+	}
+
 	private int firstTime;
 	private int firstTimeK;
 

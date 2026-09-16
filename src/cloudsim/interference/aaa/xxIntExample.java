@@ -92,7 +92,15 @@ public class xxIntExample {
 
 	static final int CONTAINER_TYPES = 1;
 	static final int[] CONTAINER_MIPS = new int[] { 100 };
-	static final int[] CONTAINER_PES = new int[] { 12 };
+	// -Diada.containerPes=<v> (jsa-repo-fix-brief Phase 4, W2.2 root cause):
+	// this, not -Diada.hosts/PM_COUNT, is what actually controls containers-
+	// per-host -- VM_PES/HOST_PES are both fixed at 48, so 48/CONTAINER_PES
+	// containers pack onto every host the VM allocator uses, and any extra
+	// hosts beyond what that packing needs sit completely idle (confirmed
+	// empirically: PM_COUNT=12 with 12 cloudlets at the default PES=12
+	// still packs 4/host onto only 3 of the 12 hosts). Default 12 = the
+	// original hardcoded value, unchanged.
+	static final int[] CONTAINER_PES = new int[] { Integer.getInteger("iada.containerPes", 12) };
 
 	/**
 	 * The available types of hosts along with the specs.

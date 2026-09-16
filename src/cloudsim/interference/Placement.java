@@ -128,6 +128,14 @@ public class Placement {
 			double currentCost = currentSolution.getTotalInterferenceCost();
 			double newCost = newSolution.getTotalInterferenceCost();
 
+			// -Diada.migCost=<v> (repair sketch, CONFORMANCE.md S4.3/N3): see
+			// the identical comment in SimulatedAnnealingOptimized. Default 0
+			// keeps this byte-identical to before.
+			double migCost = Double.parseDouble(System.getProperty("iada.migCost", "0"));
+			if (migCost > 0) {
+				newCost += newSolution.getNumberOfMigrations(currentSolution) * migCost;
+			}
+
 			if (acceptanceProbability(currentCost, newCost, temperature) > Math.random()) {
 				currentSolution = newSolution;
 			}
@@ -165,6 +173,18 @@ public class Placement {
 
 			double currentCost = currentSolution.getTotalInterferenceCost();
 			double newCost = newSolution.getTotalInterferenceCost();
+
+			// -Diada.migCost=<v> (repair sketch, CONFORMANCE.md S4.3/N3): the
+			// search was migration-blind -- migvalue=10 only ever entered the
+			// REPORTED "interf with mig" line, never the objective a mutation
+			// is accepted or rejected against. Default 0 keeps this call
+			// byte-identical to before (the ratchet at the best-update check
+			// below is untouched either way -- only the accept/reject step
+			// gains the term).
+			double migCost = Double.parseDouble(System.getProperty("iada.migCost", "0"));
+			if (migCost > 0) {
+				newCost += newSolution.getNumberOfMigrations(currentSolution) * migCost;
+			}
 
 			if (acceptanceProbability(currentCost, newCost, temperature) > Math.random()) {
 				currentSolution = newSolution;

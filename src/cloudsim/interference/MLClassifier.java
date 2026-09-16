@@ -74,6 +74,16 @@ public class MLClassifier {
 	private int firstTimeK;
 
 	public MLClassifier() {
+		this(System.getenv("INTP_R_FOLDER"));
+	}
+
+	// -Diada.oracleLabels=on (CONFORMANCE.md S4.2/repair sketch, jsa-repo-fix-
+	// brief Phase 3.2): a second MLClassifier instance, explicitly pointed at
+	// a different tier's R folder (its own Rengine, independent of the
+	// no-arg constructor's INTP_R_FOLDER-derived one), so a self-referential
+	// tier's cost lookup can be replaced with a common, tier-independent
+	// classifier's prediction. See IntContainerDataCenter's oracleMLC.
+	public MLClassifier(String rFolder) {
 		this.firstTime = 1; // 0 treina sempre a primeira exec ---- 1 usa sempre o modelo já salvo (rda)
 		this.firstTimeK = 1;
 
@@ -90,7 +100,7 @@ public class MLClassifier {
 		// Log.printLine("=======" + hostname);
 		// usar R para classificar ....
 
-		String envFolder = System.getenv("INTP_R_FOLDER");
+		String envFolder = rFolder;
 		String envLibPaths = System.getenv("INTP_R_LIBPATHS");
 		if (envFolder != null && !envFolder.isEmpty()) {
 			project_folder = envFolder.endsWith("/") ? envFolder : envFolder + "/";

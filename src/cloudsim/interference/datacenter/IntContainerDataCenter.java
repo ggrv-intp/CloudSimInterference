@@ -1095,7 +1095,10 @@ public class IntContainerDataCenter extends SimEntity {
 
 	void InterferenceClassifier() {
 		double migvalue = 10; // oversized value
-		String approach = "IASA"; // "IASA", "EVEN", "CIAPA"
+		// -Diada.approach=IASA|EVEN|CIAPA (default IASA, unchanged) -- was a
+		// hardcoded literal, so EVEN/CIAPA were reachable code that nothing
+		// ever selected at runtime.
+		String approach = System.getProperty("iada.approach", "IASA");
 		String algorithm; // RR HC SA GA SAO
 		// SA or SAO start PCA_OCP automatically
 		long startT = System.currentTimeMillis();
@@ -1374,12 +1377,29 @@ public class IntContainerDataCenter extends SimEntity {
 		Solution solution = new Solution();
 
 		List<? extends IntContainerHost> list = getVmAllocationPolicy().getContainerHostList();
+		// -Diada.debugHostCost=on (jsa-repo-fix-brief Phase 4, W2.2 zero-floor
+		// investigation): prints CloudSim's own initial per-host container
+		// count and host.getId(), so a hosts==apps run can be checked for
+		// whether the underlying allocation is genuinely 1-per-host (in
+		// which case Solution's zero-floor rule should fire) or already
+		// uneven before any SA swap ever runs (in which case the floor can
+		// never be reached, independent of anything in Solution/Placement).
+		boolean debugHostCost = "on".equalsIgnoreCase(System.getProperty("iada.debugHostCost", "off"));
+		if (debugHostCost) {
+			Log.printLine("[debugHostCost] fillInitialSolution: " + list.size() + " hosts, "
+					+ cloudletList.size() + " cloudlets total");
+		}
 		// for each host...
 		for (int i = 0; i < list.size(); i++) {
 
 			IntContainerHost host = list.get(i);
+			int nContainers = host.getVmList().get(0).getContainerList().size();
+			if (debugHostCost) {
+				Log.printLine("[debugHostCost] host index=" + i + " host.getId()=" + host.getId()
+						+ " containers=" + nContainers);
+			}
 			// for each container/cloudlet (in given VM)
-			for (int x = 0; x < host.getVmList().get(0).getContainerList().size(); x++) {
+			for (int x = 0; x < nContainers; x++) {
 				// Log.printLine(i+ " " + x);
 				IntContainer container = host.getVmList().get(0).getContainerList().get(x);
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);

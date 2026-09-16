@@ -55,36 +55,65 @@ public class IntContainerDataCenter extends SimEntity {
 	private static final boolean ORACLE_LABELS_ON =
 			"on".equalsIgnoreCase(System.getProperty("iada.oracleLabels", "off"));
 	private java.util.List<java.io.File> oracleTraceFiles = null;
+	// This tier's OWN trace tree (the same one InterferenceClassifier's own
+	// search already reads cloudlets from via the resource-link symlink) --
+	// needed so the "self, full-window" comparison point uses this tier's
+	// actual feature width, not the oracle's, over the SAME window the
+	// oracle uses. Set once, from the env var run-iada-experiment.sh already
+	// exports for exactly this purpose (VARIANT_TREE).
+	private java.util.List<java.io.File> ownTraceFiles = null;
+
+	private static java.util.List<java.io.File> listSortedTraces(String dir) {
+		// Same two-level Arrays.sort() cloudlet ordering xxIntExample uses to
+		// build cloudletList in the first place ("deterministic cross-subdir
+		// cloudlet order (fair cross-tier compare)") -- cloudlet N here is
+		// guaranteed to be the SAME (workload, pattern) as cloudlet N in
+		// whichever tier's own tree actually drove this run, by that same
+		// design guarantee, not by any path-string matching of our own.
+		java.util.List<java.io.File> out = new java.util.ArrayList<java.io.File>();
+		java.io.File root = new java.io.File(dir);
+		java.io.File[] subdirs = root.listFiles();
+		java.util.Arrays.sort(subdirs);
+		for (java.io.File sub : subdirs) {
+			java.io.File[] files = sub.listFiles();
+			java.util.Arrays.sort(files);
+			for (java.io.File f : files) out.add(f);
+		}
+		return out;
+	}
 
 	private void oracleRescore(Solution sol) {
 		if (!ORACLE_LABELS_ON) return;
 		String rFolder = System.getProperty("iada.oracleRFolder");
-		if (rFolder == null || rFolder.isEmpty()) {
-			Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleRFolder=<path to tier B's R folder>");
+		String oracleDir = System.getProperty("iada.oracleTreeDir");
+		String ownDir = System.getenv("VARIANT_TREE"); // exported by run-iada-experiment.sh
+		if (rFolder == null || rFolder.isEmpty() || oracleDir == null || oracleDir.isEmpty()) {
+			Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleRFolder=<path> and -Diada.oracleTreeDir=<path>");
 			return;
 		}
-		if (oracleTraceFiles == null) {
-			String dir = System.getProperty("iada.oracleTreeDir");
-			if (dir == null || dir.isEmpty()) {
-				Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleTreeDir=<path to the oracle (tier B) source tree>");
-				return;
-			}
-			// Same two-level Arrays.sort() cloudlet ordering xxIntExample uses to
-			// build cloudletList in the first place ("deterministic cross-subdir
-			// cloudlet order (fair cross-tier compare)") -- cloudlet N here is
-			// guaranteed to be the SAME (workload, pattern) as cloudlet N in
-			// whichever tier's own tree actually drove this run, by that same
-			// design guarantee, not by any path-string matching of our own.
-			oracleTraceFiles = new java.util.ArrayList<java.io.File>();
-			java.io.File root = new java.io.File(dir);
-			java.io.File[] subdirs = root.listFiles();
-			java.util.Arrays.sort(subdirs);
-			for (java.io.File sub : subdirs) {
-				java.io.File[] files = sub.listFiles();
-				java.util.Arrays.sort(files);
-				for (java.io.File f : files) oracleTraceFiles.add(f);
-			}
+		if (ownDir == null || ownDir.isEmpty()) {
+			Log.printLine("[oracleRescore] SKIPPED: VARIANT_TREE not set in the environment (run-iada-experiment.sh should export it)");
+			return;
 		}
+		if (oracleTraceFiles == null) oracleTraceFiles = listSortedTraces(oracleDir);
+		if (ownTraceFiles == null) ownTraceFiles = listSortedTraces(ownDir);
+
+		// Self, full-window: this tier's OWN classifier/folder (no swap needed),
+		// same (0, full-length) window the oracle pass uses below -- isolates
+		// the window difference from idi_avg (which used the search's narrow
+		// per-interval windows), so self vs oracle differs by classifier width
+		// alone.
+		for (int clId = 1; clId <= sol.getSize(); clId++) {
+			if (clId - 1 >= ownTraceFiles.size()) continue;
+			Interference ownInterf = new Interference(ownTraceFiles.get(clId - 1).getAbsolutePath());
+			MLCResult r = MLC.getMLClass(ownInterf, 0, ownInterf.getIntLength());
+			sol.setSelfCost(clId, r.getCloudletCost());
+		}
+
+		// Oracle, full-window: tier B's classifier (reusing MLC's Rengine --
+		// JRI allows only one per JVM process, confirmed by testing a second
+		// instance: it throws "R is already initialized" -- so this repoints
+		// MLC's R folder for this call and restores it after).
 		String ownFolder = MLC.getProjectFolder();
 		MLC.setProjectFolder(rFolder);
 		try {
@@ -101,7 +130,11 @@ public class IntContainerDataCenter extends SimEntity {
 		} finally {
 			MLC.setProjectFolder(ownFolder); // restore, even though nothing else uses MLC after this call today
 		}
-		Log.printLine("\noracle re-score (tier B classifier, same placement, jsa-repo-fix-brief Phase 3.2) :\n");
+		Log.printLine("\nself re-score, full window (this tier's own classifier, same placement, "
+				+ "jsa-repo-fix-brief Phase 3.2) :\n");
+		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostSelfFullWindow()));
+		Log.printLine("\noracle re-score, full window (tier B classifier, same placement, "
+				+ "jsa-repo-fix-brief Phase 3.2) :\n");
 		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostOracle()));
 	}
 	private List<IntContainerCloudlet> cloudletList; // adapt

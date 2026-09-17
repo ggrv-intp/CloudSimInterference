@@ -55,6 +55,49 @@ public class IntContainerDataCenter extends SimEntity {
 	private static final boolean ORACLE_LABELS_ON =
 			"on".equalsIgnoreCase(System.getProperty("iada.oracleLabels", "off"));
 	private java.util.List<java.io.File> oracleTraceFiles = null;
+
+	// S16/S3 (jsa-repo-fix-brief): one "CLS <tier> <interval> <cloudletId>
+	// <predClass> <level>" line per getMLClass call, default off so existing
+	// output is byte-for-byte unchanged. <tier> comes from -Diada.tier=T1|A|B
+	// (the run wrapper must set it; "unknown" otherwise). <predClass> is the
+	// single resource among {cpu,mem,disk,net,cache,regime} whose K-means
+	// level ranks highest (abs<low<mod<hig) among what MLCResult returned for
+	// this call -- svm_classifier_level buckets rows per-resource and each
+	// bucket gets its own level, so there is no single-class field to read
+	// off; "highest ranking level" is this pass's explicit, documented
+	// tie-break (ties broken by first-listed resource in the array below).
+	private static final boolean LOG_CLASSES =
+			"on".equalsIgnoreCase(System.getProperty("iada.logClasses", "off"));
+	private static final String IADA_TIER = System.getProperty("iada.tier", "unknown");
+
+	private static int levelRank(String level) {
+		if (level == null) return -1;
+		switch (level) {
+			case "abs": return 0;
+			case "low": return 1;
+			case "mod": return 2;
+			case "hig": return 3;
+			default: return -1;
+		}
+	}
+
+	private static void logClass(int interval, int cloudletId, MLCResult r) {
+		if (!LOG_CLASSES) return;
+		String[] names = { "cpu", "mem", "disk", "net", "cache", "regime" };
+		String[] levels = { r.getCpu(), r.getMemory(), r.getDisk(), r.getNetwork(), r.getCache(), r.getRegime() };
+		String predClass = "none";
+		String predLevel = "abs";
+		int bestRank = -1;
+		for (int k = 0; k < names.length; k++) {
+			int rank = levelRank(levels[k]);
+			if (rank > bestRank) {
+				bestRank = rank;
+				predClass = names[k];
+				predLevel = levels[k];
+			}
+		}
+		Log.printLine("CLS " + IADA_TIER + " " + interval + " " + cloudletId + " " + predClass + " " + predLevel);
+	}
 	// This tier's OWN trace tree (the same one InterferenceClassifier's own
 	// search already reads cloudlets from via the resource-link symlink) --
 	// needed so the "self, full-window" comparison point uses this tier's
@@ -1502,6 +1545,7 @@ public class IntContainerDataCenter extends SimEntity {
 			IntContainerCloudlet cloudlet = cloudletList.get(i);
 
 			MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+			logClass(start, cloudlet.getCloudletId(), MLCR);
 
 			solution.updateCloudletInterferenceCost((i + 1), MLCR.getCloudletCost());
 
@@ -1545,6 +1589,7 @@ public class IntContainerDataCenter extends SimEntity {
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 				solution.addCloudletToSolution(host.getId(), host.getNumberOfPes(), cloudlet.getCloudletId(),
 						container.getNumberOfPes(), MLCR.getCloudletCost());
 
@@ -1571,6 +1616,7 @@ public class IntContainerDataCenter extends SimEntity {
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 
 				hostcost += MLCR.getCloudletCost()
 						/ ((double) container.getNumberOfPes() / (double) host.getNumberOfPes());
@@ -1609,6 +1655,7 @@ public class IntContainerDataCenter extends SimEntity {
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 				hostcost += MLCR.getCloudletCost()
 						/ ((double) container.getNumberOfPes() / (double) host.getNumberOfPes());
 				Log.printLine("Host" + host.getId() + " " + String.format("%.2f", hostcost) + " cloudlet"

@@ -56,7 +56,9 @@ public class xxIntExample {
 	static final boolean ENABLE_OUTPUT = true;
 	static final boolean OUTPUT_CSV = false;
 	static final double SCHEDULING_INTERVAL = 1.0D;
-	static final double SIMULATION_LIMIT = 99999999999.0D;// 601.0D;
+	// Must stay in lockstep with -Diada.horizon (IntContainerDataCenter):
+	// both cap trace indexing, so a longer-trace run needs both raised.
+	static final double SIMULATION_LIMIT = Double.parseDouble(System.getProperty("iada.simLimit", "119"));// our campaign traces are 120 samples; cap below that to avoid indexing past trace end (bundled traces were 7200)
 	/**
 	 * Cloudlet specs
 	 */
@@ -67,7 +69,14 @@ public class xxIntExample {
 	 * Startup delay for VMs and the containers are mentioned here.
 	 */
 	static final double CONTAINER_STARTTUP_DELAY = 0.4;// the amount is in seconds
-	static final double VM_STARTTUP_DELAY = 100;// the amoun is in seconds
+	// At the committed 100 s, with the horizon capped at 119, only 19 of the 120
+	// trace samples are post-startup -- the placement is scored on a 19 s tail in
+	// which no cloudlet completes (CLOUDLET_LENGTH 60000 at VM_MIPS 100 needs
+	// 600 s). We are not studying VM boot, so the delay buys nothing and costs
+	// most of the trace. Parameterised to sweep it; default is the committed 100
+	// so banked comparisons stay valid.
+	static final double VM_STARTTUP_DELAY =
+			Double.parseDouble(System.getProperty("iada.vmStartup", "100"));// the amoun is in seconds
 
 	/**
 	 * The available virtual machine types along with the specs.
@@ -83,7 +92,15 @@ public class xxIntExample {
 
 	static final int CONTAINER_TYPES = 1;
 	static final int[] CONTAINER_MIPS = new int[] { 100 };
-	static final int[] CONTAINER_PES = new int[] { 12 };
+	// -Diada.containerPes=<v> (jsa-repo-fix-brief Phase 4, W2.2 root cause):
+	// this, not -Diada.hosts/PM_COUNT, is what actually controls containers-
+	// per-host -- VM_PES/HOST_PES are both fixed at 48, so 48/CONTAINER_PES
+	// containers pack onto every host the VM allocator uses, and any extra
+	// hosts beyond what that packing needs sit completely idle (confirmed
+	// empirically: PM_COUNT=12 with 12 cloudlets at the default PES=12
+	// still packs 4/host onto only 3 of the 12 hosts). Default 12 = the
+	// original hardcoded value, unchanged.
+	static final int[] CONTAINER_PES = new int[] { Integer.getInteger("iada.containerPes", 12) };
 
 	/**
 	 * The available types of hosts along with the specs.
@@ -102,9 +119,15 @@ public class xxIntExample {
 	 * population can also be different from cloudlet's population.
 	 */
 
-	static final int NUMBER_HOSTS = 96; //initial creation (need to fix)
-	static final int NUMBER_VMS = 96;
-	static final int NUMBER_CLOUDLETS = 192;
+	// Read from the properties the drivers already pass (run-iada-experiment.sh
+	// sets -Diada.hosts/-Diada.vms). While these were compile-time constants the
+	// flags were inert: PM_COUNT shaped input.txt while the datacenter kept
+	// building 12 hosts regardless, so a sweep leg would have produced a number
+	// instead of an error. Defaults are the committed 12, so nothing moves until
+	// a sweep asks it to.
+	static final int NUMBER_HOSTS = Integer.getInteger("iada.hosts", 12); //reduced for the per-tier IDI sim on our workloads
+	static final int NUMBER_VMS = Integer.getInteger("iada.vms", NUMBER_HOSTS);
+	static final int NUMBER_CLOUDLETS = 192; // load cap; container/vm lists adapt to actual loaded count
 
 	/**
 	 * The cloudlet list.
@@ -230,7 +253,9 @@ public class xxIntExample {
 			// Log.print("\n");
 			// }
 
-			containerList = createContainerList(brokerId, NUMBER_CLOUDLETS);
+			// match container count to the actually-loaded cloudlets (our trees
+			// carry fewer than NUMBER_CLOUDLETS) so subList(0, size) below is valid.
+			containerList = createContainerList(brokerId, cloudletList.size());
 			vmList = createVmList(brokerId, NUMBER_VMS);
 			/**
 			 * 10- The address for logging the statistics of the VMs, containers in the data
@@ -506,6 +531,7 @@ public class xxIntExample {
 
 		java.io.File inputFolder1 = new java.io.File(inputFolderName);
 		java.io.File[] files1 = inputFolder1.listFiles();
+		Arrays.sort(files1); // deterministic cross-subdir cloudlet order (fair cross-tier compare)
 		// Log.printLine("======== "+files1.length);
 		int createdCloudlets = 0;
 		for (java.io.File aFiles1 : files1) {

@@ -8,6 +8,17 @@ import org.cloudbus.cloudsim.Log;
 
 public class Placement {
 
+	// S16/S5 (jsa-repo-fix-brief): once the best solution found reaches zero
+	// interference cost (every host has at most one cloudlet, so there is
+	// nothing left to reduce -- see Solution.getCostFromHost's `hostCost == 1
+	// ? 0 : hostCost`), continued annealing cannot improve on it, only spend
+	// wallclock. Default off, so existing runs are unaffected; bug-fix
+	// candidate flagged in CONFORMANCE.md rather than made the default,
+	// since some already-banked results (S15 etc.) were produced without it
+	// and reproducing them exactly requires it to stay off unless asked for.
+	private static final boolean EARLY_EXIT_ZERO =
+			"on".equalsIgnoreCase(System.getProperty("iada.earlyExitZero", "off"));
+
 	// public static void main(String[] args) {
 
 	// System.out.println(randomInt(0, 16));
@@ -128,6 +139,14 @@ public class Placement {
 			double currentCost = currentSolution.getTotalInterferenceCost();
 			double newCost = newSolution.getTotalInterferenceCost();
 
+			// -Diada.migCost=<v> (repair sketch, CONFORMANCE.md S4.3/N3): see
+			// the identical comment in SimulatedAnnealingOptimized. Default 0
+			// keeps this byte-identical to before.
+			double migCost = Double.parseDouble(System.getProperty("iada.migCost", "0"));
+			if (migCost > 0) {
+				newCost += newSolution.getNumberOfMigrations(currentSolution) * migCost;
+			}
+
 			if (acceptanceProbability(currentCost, newCost, temperature) > Math.random()) {
 				currentSolution = newSolution;
 			}
@@ -159,12 +178,38 @@ public class Placement {
 
 		while (temperature > 0.000001 && noChange < maxNoChange) {
 			numOp++;
+
+			// S16/S5: must be checked BEFORE calling randomSwap(), not just
+			// after -- when every cloudlet is alone on its host (e.g.
+			// -Diada.containerPes=48, 1 application per host), swapping()'s
+			// own retry loop ("while (runninginOnlyOneHost(cloudlet1))
+			// cloudlet1 = randomInt(...)") never finds a valid partner and
+			// never returns, so a check placed after randomSwap() is never
+			// reached at all. Checking currentSolution here (not just best)
+			// catches this on the very first iteration, before the first
+			// swap attempt.
+			if (EARLY_EXIT_ZERO && currentSolution.getTotalInterferenceCost() == 0) {
+				break;
+			}
+
 			Solution newSolution = currentSolution.copy();
 
 			newSolution = randomSwap(newSolution); // generate a modified solution
 
 			double currentCost = currentSolution.getTotalInterferenceCost();
 			double newCost = newSolution.getTotalInterferenceCost();
+
+			// -Diada.migCost=<v> (repair sketch, CONFORMANCE.md S4.3/N3): the
+			// search was migration-blind -- migvalue=10 only ever entered the
+			// REPORTED "interf with mig" line, never the objective a mutation
+			// is accepted or rejected against. Default 0 keeps this call
+			// byte-identical to before (the ratchet at the best-update check
+			// below is untouched either way -- only the accept/reject step
+			// gains the term).
+			double migCost = Double.parseDouble(System.getProperty("iada.migCost", "0"));
+			if (migCost > 0) {
+				newCost += newSolution.getNumberOfMigrations(currentSolution) * migCost;
+			}
 
 			if (acceptanceProbability(currentCost, newCost, temperature) > Math.random()) {
 				currentSolution = newSolution;
@@ -176,8 +221,11 @@ public class Placement {
 					
 					best = currentSolution;
 					noChange = 0;
-					
+
 				}
+			}
+			if (EARLY_EXIT_ZERO && best.getTotalInterferenceCost() == 0) {
+				break;
 			}
 			noChange++;
 			temperature *= 1 - coolingRate;

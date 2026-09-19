@@ -70,10 +70,33 @@ public class MLClassifier {
 	// Rengine re = new Rengine(new String[] { "--no-save" }, false, null);
 	String project_folder = null;
 
+	// JRI/R only supports ONE Rengine per JVM process -- a second
+	// `new MLClassifier(otherFolder)` throws "R is already initialized"
+	// inside the Rengine constructor. So a common-classifier oracle re-score
+	// (jsa-repo-fix-brief Phase 3.2) can't use a second instance; it must
+	// reuse this one's existing Rengine, repointed at a different R folder.
+	public String getProjectFolder() {
+		return project_folder;
+	}
+
+	public void setProjectFolder(String folder) {
+		project_folder = folder.endsWith("/") ? folder : folder + "/";
+	}
+
 	private int firstTime;
 	private int firstTimeK;
 
 	public MLClassifier() {
+		this(System.getenv("INTP_R_FOLDER"));
+	}
+
+	// -Diada.oracleLabels=on (CONFORMANCE.md S4.2/repair sketch, jsa-repo-fix-
+	// brief Phase 3.2): a second MLClassifier instance, explicitly pointed at
+	// a different tier's R folder (its own Rengine, independent of the
+	// no-arg constructor's INTP_R_FOLDER-derived one), so a self-referential
+	// tier's cost lookup can be replaced with a common, tier-independent
+	// classifier's prediction. See IntContainerDataCenter's oracleMLC.
+	public MLClassifier(String rFolder) {
 		this.firstTime = 1; // 0 treina sempre a primeira exec ---- 1 usa sempre o modelo já salvo (rda)
 		this.firstTimeK = 1;
 
@@ -90,7 +113,7 @@ public class MLClassifier {
 		// Log.printLine("=======" + hostname);
 		// usar R para classificar ....
 
-		String envFolder = System.getenv("INTP_R_FOLDER");
+		String envFolder = rFolder;
 		String envLibPaths = System.getenv("INTP_R_LIBPATHS");
 		if (envFolder != null && !envFolder.isEmpty()) {
 			project_folder = envFolder.endsWith("/") ? envFolder : envFolder + "/";
@@ -146,25 +169,30 @@ public class MLClassifier {
 		re.eval("source(\"" + project_folder + "kmeans.R\")");
 		re.eval("source(\"" + project_folder + "svm.R\")");
 
-		re.eval("teste <- as.data.frame(matrix(0, ncol = 7))");
-		re.eval("teste <- setNames(teste, c(\"nets\",\"netp\",\"blk\",\"mbw\",\"llcmr\",\"llcocc\",\"cpu\"))");
+		// Generic over feature width (7 for T1/A, 15 for B): take the column
+		// names from the loaded training frame `total` so names + order match
+		// the .rda exactly (this also removes the legacy netp/nets swap), and
+		// build each row data.frame from the trace's actual width.
+		// width = number of FEATURES in the training frame (7 for T1/A, 15 for B),
+		// not the trace buffer length (always 15 after the int[15] widening — the
+		// trailing slots are zero-padding for 7-col traces and must be ignored).
+		re.eval("feat_cols <- setdiff(names(total), \"category\")");
+		int width = re.eval("length(feat_cols)").asInt();
+		re.eval("teste <- setNames(as.data.frame(matrix(0, ncol = length(feat_cols))), feat_cols)");
 
-		int[] aux = new int[7];
+		int[] aux = new int[width];
 
 		for (int i = start; i < finish; i++) {
-
-			for (int j = 0; j < 7; j++) {
+			StringBuilder sb = new StringBuilder("aux <- data.frame(");
+			for (int j = 0; j < width; j++) {
 				aux[j] = interf.getIntByLine(i)[j];
-				// System.out.print(a.getIntByLine(i)[j] + " ");
-
+				sb.append("as.integer(").append(aux[j]).append(")");
+				if (j < width - 1) sb.append(",");
 			}
-			re.eval("aux <- data.frame(as.integer(" + aux[0] + "),as.integer(" + aux[1] + "),as.integer(" + aux[2]
-					+ "),as.integer(" + aux[3] + "),as.integer(" + aux[4] + "),as.integer(" + aux[5] + "),as.integer("
-					+ aux[6] + "))");
-			re.eval("aux <- setNames(aux, c(\"nets\",\"netp\",\"blk\",\"mbw\",\"llcmr\",\"llcocc\",\"cpu\"))");
+			sb.append(")");
+			re.eval(sb.toString());
+			re.eval("aux <- setNames(aux, feat_cols)");
 			re.eval("teste <- rbind(teste, aux)");
-			// System.out.print("\n");
-
 		}
 
 		REXP hh = re.eval("abc <-svm_classifier_level(teste,1,nrow(teste))");

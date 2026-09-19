@@ -57,6 +57,49 @@ public class Solution implements Cloneable {
 		return (double) cloudlet.get("clCost");
 	}
 
+	// -Diada.oracleLabels=on (jsa-repo-fix-brief Phase 3.2): a SEPARATE cost
+	// field per cloudlet, parallel to "clCost", populated by re-classifying
+	// every cloudlet in a CONVERGED placement with one common (tier B)
+	// classifier fed each cloudlet's full 15-metric fingerprint -- regardless
+	// of which tier's own (narrower) classifier drove the search that
+	// produced this placement. "clCost" (and the search that used it) is
+	// UNCHANGED; this is a post-hoc re-score of the same placement on a
+	// common yardstick, not a different search.
+	public void setOracleCost(int clId, double cost) {
+		HashMap cloudlet = (HashMap) this.placement.get(clId);
+		cloudlet.put("oracleCost", cost);
+		this.placement.replace(clId, cloudlet);
+	}
+
+	public boolean hasOracleCost(int clId) {
+		HashMap cloudlet = (HashMap) this.placement.get(clId);
+		return cloudlet != null && cloudlet.containsKey("oracleCost");
+	}
+
+	public double getOracleCostFromCloudlet(int clId) {
+		HashMap cloudlet = (HashMap) this.placement.get(clId);
+		return (double) cloudlet.get("oracleCost");
+	}
+
+	// Companion to oracleCost: the SAME tier's OWN classifier, re-run over the
+	// SAME full-trace window the oracle re-score uses (not the narrow,
+	// per-interval window the original search classification used). Needed
+	// because idi_avg (the search's own reported number) and a full-window
+	// oracle re-score are not directly comparable -- they differ in BOTH
+	// classifier width AND classification window, conflating two variables.
+	// selfCost isolates the window difference, so oracleCost vs selfCost
+	// (both full-window) isolates classifier width alone.
+	public void setSelfCost(int clId, double cost) {
+		HashMap cloudlet = (HashMap) this.placement.get(clId);
+		cloudlet.put("selfCost", cost);
+		this.placement.replace(clId, cloudlet);
+	}
+
+	public double getSelfCostFromCloudlet(int clId) {
+		HashMap cloudlet = (HashMap) this.placement.get(clId);
+		return (double) cloudlet.get("selfCost");
+	}
+
 	public int getSize() {
 
 		return this.placement.size();
@@ -87,11 +130,69 @@ public class Solution implements Cloneable {
 			// if this cloudlet/container is the only one ruuning inside a given Host,
 			// there will be no interference incidence, hence its interference cost is 1
 			if ((double) cloudlet.get("hostId") == host && !runninginOnlyOneHost(i)) {
-				
+
 				//hostCost *= getCostFromCloudlet(i) ;
 				hostCost *= getCostFromCloudlet(i) / (getCloudRes(i) / getHostRes(i));
 				// Log.printConcatLine(getCostFromCloudlet(i), " - ",getCloudRes(i), " -
 				// ",getHostRes(i) );
+			}
+		}
+
+		return hostCost == 1 ? 0 : hostCost;
+
+	}
+
+	// Oracle counterparts of getTotalInterferenceCost/getCostFromHost -- same
+	// algorithm exactly (same zero-floor sentinel, same PE-ratio scaling, same
+	// host-loop), reading "oracleCost" instead of "clCost". Kept as a literal
+	// mirror rather than a shared helper so a bug fix to one path is never
+	// silently also a change to the other's already-validated numbers.
+	public double getTotalInterferenceCostOracle() {
+		int nHosts = countHosts();
+		double totalCost = 0;
+
+		for (int i = 1; i <= nHosts; i++) {
+			totalCost += getCostFromHostOracle(i);
+		}
+		return (totalCost * (end - start)) / ttime;
+	}
+
+	public double getCostFromHostOracle(int host) {
+		double hostCost = 1;
+		HashMap cloudlet = new HashMap<String, Double>();
+
+		for (int i = 1; i <= getSize(); i++) {
+			cloudlet = (HashMap) this.placement.get(i);
+			if ((double) cloudlet.get("hostId") == host && !runninginOnlyOneHost(i)) {
+				hostCost *= getOracleCostFromCloudlet(i) / (getCloudRes(i) / getHostRes(i));
+			}
+		}
+
+		return hostCost == 1 ? 0 : hostCost;
+
+	}
+
+	// Self counterparts, reading "selfCost" -- the tier's OWN classifier
+	// re-run over the same full window the oracle uses, so oracle vs self
+	// isolates classifier width alone (see setSelfCost's comment).
+	public double getTotalInterferenceCostSelfFullWindow() {
+		int nHosts = countHosts();
+		double totalCost = 0;
+
+		for (int i = 1; i <= nHosts; i++) {
+			totalCost += getCostFromHostSelfFullWindow(i);
+		}
+		return (totalCost * (end - start)) / ttime;
+	}
+
+	public double getCostFromHostSelfFullWindow(int host) {
+		double hostCost = 1;
+		HashMap cloudlet = new HashMap<String, Double>();
+
+		for (int i = 1; i <= getSize(); i++) {
+			cloudlet = (HashMap) this.placement.get(i);
+			if ((double) cloudlet.get("hostId") == host && !runninginOnlyOneHost(i)) {
+				hostCost *= getSelfCostFromCloudlet(i) / (getCloudRes(i) / getHostRes(i));
 			}
 		}
 

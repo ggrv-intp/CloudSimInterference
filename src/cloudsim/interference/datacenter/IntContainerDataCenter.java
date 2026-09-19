@@ -33,6 +33,160 @@ public class IntContainerDataCenter extends SimEntity {
 
 	private MLClassifier MLC = new MLClassifier(); // adapt
 	private MLCResult MLCR = new MLCResult(); // adapt
+
+	// -Diada.oracleLabels=on (jsa-repo-fix-brief Phase 3.2): post-hoc re-score
+	// a CONVERGED solution with one common classifier (tier B's, the richest
+	// fingerprint), fed each cloudlet's full 15-metric trace regardless of
+	// which tier's own (narrower) classifier actually drove the search. The
+	// search itself, and every number it already reports, is untouched --
+	// this only adds a second, independent total via Solution's parallel
+	// oracleCost/getTotalInterferenceCostOracle.
+	//
+	// JRI/R allows only ONE Rengine per JVM process -- a second
+	// `new MLClassifier(otherFolder)` throws "R is already initialized" the
+	// instant its constructor tries to start a second Rengine (confirmed by
+	// running it: the simulation itself completed and printed its normal
+	// idi numbers, then crashed on this exact line). So this reuses the
+	// SAME MLC instance/Rengine the whole run already has, repointing its R
+	// folder to the oracle's (tier B) folder for this call only, then
+	// restoring the tier's own folder immediately after -- oracleRescore
+	// runs once, after the search is fully done, so nothing else needs MLC
+	// mid-swap. Lazily initialized so a run with the flag off pays zero cost.
+	private static final boolean ORACLE_LABELS_ON =
+			"on".equalsIgnoreCase(System.getProperty("iada.oracleLabels", "off"));
+	private java.util.List<java.io.File> oracleTraceFiles = null;
+
+	// S16/S3 (jsa-repo-fix-brief): one "CLS <tier> <interval> <cloudletId>
+	// <predClass> <level>" line per getMLClass call, default off so existing
+	// output is byte-for-byte unchanged. <tier> comes from -Diada.tier=T1|A|B
+	// (the run wrapper must set it; "unknown" otherwise). <predClass> is the
+	// single resource among {cpu,mem,disk,net,cache,regime} whose K-means
+	// level ranks highest (abs<low<mod<hig) among what MLCResult returned for
+	// this call -- svm_classifier_level buckets rows per-resource and each
+	// bucket gets its own level, so there is no single-class field to read
+	// off; "highest ranking level" is this pass's explicit, documented
+	// tie-break (ties broken by first-listed resource in the array below).
+	private static final boolean LOG_CLASSES =
+			"on".equalsIgnoreCase(System.getProperty("iada.logClasses", "off"));
+	private static final String IADA_TIER = System.getProperty("iada.tier", "unknown");
+
+	private static int levelRank(String level) {
+		if (level == null) return -1;
+		switch (level) {
+			case "abs": return 0;
+			case "low": return 1;
+			case "mod": return 2;
+			case "hig": return 3;
+			default: return -1;
+		}
+	}
+
+	private static void logClass(int interval, int cloudletId, MLCResult r) {
+		if (!LOG_CLASSES) return;
+		String[] names = { "cpu", "mem", "disk", "net", "cache", "regime" };
+		String[] levels = { r.getCpu(), r.getMemory(), r.getDisk(), r.getNetwork(), r.getCache(), r.getRegime() };
+		String predClass = "none";
+		String predLevel = "abs";
+		int bestRank = -1;
+		for (int k = 0; k < names.length; k++) {
+			int rank = levelRank(levels[k]);
+			if (rank > bestRank) {
+				bestRank = rank;
+				predClass = names[k];
+				predLevel = levels[k];
+			}
+		}
+		Log.printLine("CLS " + IADA_TIER + " " + interval + " " + cloudletId + " " + predClass + " " + predLevel);
+	}
+	// This tier's OWN trace tree (the same one InterferenceClassifier's own
+	// search already reads cloudlets from via the resource-link symlink) --
+	// needed so the "self, full-window" comparison point uses this tier's
+	// actual feature width, not the oracle's, over the SAME window the
+	// oracle uses. Set once, from the env var run-iada-experiment.sh already
+	// exports for exactly this purpose (VARIANT_TREE).
+	private java.util.List<java.io.File> ownTraceFiles = null;
+
+	private static java.util.List<java.io.File> listSortedTraces(String dir) {
+		// Same two-level Arrays.sort() cloudlet ordering xxIntExample uses to
+		// build cloudletList in the first place ("deterministic cross-subdir
+		// cloudlet order (fair cross-tier compare)") -- cloudlet N here is
+		// guaranteed to be the SAME (workload, pattern) as cloudlet N in
+		// whichever tier's own tree actually drove this run, by that same
+		// design guarantee, not by any path-string matching of our own.
+		java.util.List<java.io.File> out = new java.util.ArrayList<java.io.File>();
+		java.io.File root = new java.io.File(dir);
+		java.io.File[] subdirs = root.listFiles();
+		java.util.Arrays.sort(subdirs);
+		for (java.io.File sub : subdirs) {
+			java.io.File[] files = sub.listFiles();
+			java.util.Arrays.sort(files);
+			for (java.io.File f : files) out.add(f);
+		}
+		return out;
+	}
+
+	private void oracleRescore(Solution sol) {
+		if (!ORACLE_LABELS_ON) return;
+		String rFolder = System.getProperty("iada.oracleRFolder");
+		String oracleDir = System.getProperty("iada.oracleTreeDir");
+		String ownDir = System.getenv("VARIANT_TREE"); // exported by run-iada-experiment.sh
+		if (rFolder == null || rFolder.isEmpty() || oracleDir == null || oracleDir.isEmpty()) {
+			Log.printLine("[oracleRescore] SKIPPED: -Diada.oracleLabels=on requires -Diada.oracleRFolder=<path> and -Diada.oracleTreeDir=<path>");
+			return;
+		}
+		if (ownDir == null || ownDir.isEmpty()) {
+			Log.printLine("[oracleRescore] SKIPPED: VARIANT_TREE not set in the environment (run-iada-experiment.sh should export it)");
+			return;
+		}
+		if (oracleTraceFiles == null) oracleTraceFiles = listSortedTraces(oracleDir);
+		if (ownTraceFiles == null) ownTraceFiles = listSortedTraces(ownDir);
+
+		// Self, full-window: this tier's OWN classifier/folder (no swap needed),
+		// same (0, full-length) window the oracle pass uses below -- isolates
+		// the window difference from idi_avg (which used the search's narrow
+		// per-interval windows), so self vs oracle differs by classifier width
+		// alone.
+		for (int clId = 1; clId <= sol.getSize(); clId++) {
+			if (clId - 1 >= ownTraceFiles.size()) continue;
+			Interference ownInterf = new Interference(ownTraceFiles.get(clId - 1).getAbsolutePath());
+			MLCResult r = MLC.getMLClass(ownInterf, 0, ownInterf.getIntLength());
+			sol.setSelfCost(clId, r.getCloudletCost());
+		}
+
+		// Oracle, full-window: tier B's classifier (reusing MLC's Rengine --
+		// JRI allows only one per JVM process, confirmed by testing a second
+		// instance: it throws "R is already initialized" -- so this repoints
+		// MLC's R folder for this call and restores it after).
+		String ownFolder = MLC.getProjectFolder();
+		MLC.setProjectFolder(rFolder);
+		try {
+			for (int clId = 1; clId <= sol.getSize(); clId++) {
+				if (clId - 1 >= oracleTraceFiles.size()) {
+					Log.printLine("[oracleRescore] cloudlet " + clId + " has no oracle trace counterpart (tree has "
+							+ oracleTraceFiles.size() + " traces) -- skipped");
+					continue;
+				}
+				Interference oracleInterf = new Interference(oracleTraceFiles.get(clId - 1).getAbsolutePath());
+				MLCResult r = MLC.getMLClass(oracleInterf, 0, oracleInterf.getIntLength());
+				sol.setOracleCost(clId, r.getCloudletCost());
+			}
+		} finally {
+			MLC.setProjectFolder(ownFolder); // restore, even though nothing else uses MLC after this call today
+		}
+		Log.printLine("\nself re-score, full window (this tier's own classifier, same placement, "
+				+ "jsa-repo-fix-brief Phase 3.2) :\n");
+		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostSelfFullWindow()));
+		// Reference label derived from the oracle R folder, not hardcoded to
+		// "tier B": the 3x3 placement-tier x reference-classifier matrix (S15)
+		// re-scores with the T1 and A classifiers as the reference too. The
+		// parser keys on the literal "oracle re-score" prefix only, never on
+		// the tier name, so this text is free to vary per run.
+		String refDir = rFolder.endsWith("/") ? rFolder.substring(0, rFolder.length() - 1) : rFolder;
+		String refLabel = new java.io.File(refDir).getName();
+		Log.printLine("\noracle re-score, full window (tier " + refLabel + " classifier, same placement, "
+				+ "jsa-repo-fix-brief Phase 3.2) :\n");
+		Log.printConcatLine(util.printDouble(sol.getTotalInterferenceCostOracle()));
+	}
 	private List<IntContainerCloudlet> cloudletList; // adapt
 	private boolean classify = false; // adapt
 	private List<Solution> solutionList = new ArrayList<Solution>(); // adapt
@@ -1095,7 +1249,10 @@ public class IntContainerDataCenter extends SimEntity {
 
 	void InterferenceClassifier() {
 		double migvalue = 10; // oversized value
-		String approach = "IASA"; // "IASA", "EVEN", "CIAPA"
+		// -Diada.approach=IASA|EVEN|CIAPA (default IASA, unchanged) -- was a
+		// hardcoded literal, so EVEN/CIAPA were reachable code that nothing
+		// ever selected at runtime.
+		String approach = System.getProperty("iada.approach", "IASA");
 		String algorithm; // RR HC SA GA SAO
 		// SA or SAO start PCA_OCP automatically
 		long startT = System.currentTimeMillis();
@@ -1103,7 +1260,14 @@ public class IntContainerDataCenter extends SimEntity {
 		List<Integer> nMig = new ArrayList<Integer>();
 
 		List<Solution> solutionList1 = new ArrayList<Solution>(); // adapt
-		int interval = 600, start = 1, end = 0, total = 7200, count = 1;
+		// `total` must stay strictly below the trace length or getIntByLine walks
+		// off the end -- that coupling, held as a bare literal, is what produced
+		// the "Index 120 out of bounds for length 120" crash when 7200-sample
+		// bundled traces were swapped for 120-sample campaign ones. Keeping it a
+		// property means a future trace length is a flag, not a source edit and
+		// another afternoon in a stack trace. Default 119 = the committed value.
+		int interval = 600, start = 1, end = 0, count = 1;
+		int total = Integer.getInteger("iada.horizon", 119); // our campaign traces are 120 samples (idx 0..119); sim horizon stays < trace length
 
 		Solution nextSolution = new Solution();
 		// find the best intervals to make placement decisions.
@@ -1134,31 +1298,12 @@ public class IntContainerDataCenter extends SimEntity {
 			// sending cloudletTraces list to R function
 			// intervals = MLC.getIntervalsOCPM(cloudletTraces, start, total);
 
-			// manual
+			// manual intervals retargeted to our 120-sample traces: placement
+			// period = 20s -> decisions at 20/40/60/80/100 + the last at `total`
+			// (119). get(1)=20 sets `interval`; nextInterval is never advanced so
+			// only get(1) is read. Keeps every trace access < 120.
 			intervals.add(1);
-			intervals.add(311);
-			intervals.add(622);
-			intervals.add(940);
-			intervals.add(1267);
-			intervals.add(1575);
-			intervals.add(1878);
-			intervals.add(2183);
-			intervals.add(2491);
-			intervals.add(2812);
-			intervals.add(3130);
-			intervals.add(3448);
-			intervals.add(3758);
-			intervals.add(4070);
-			intervals.add(4371);
-			intervals.add(4678);
-			intervals.add(4982);
-			intervals.add(5287);
-			intervals.add(5591);
-			intervals.add(5902);
-			intervals.add(6217);
-			intervals.add(6534);
-			intervals.add(6850);
-			intervals.add(7164);
+			intervals.add(20);
 			// print found intervals
 			// for (int i = 0; i < intervals.size(); i++) {
 			// System.out.println(intervals.get(i));
@@ -1268,6 +1413,7 @@ public class IntContainerDataCenter extends SimEntity {
 						.printDouble(solutionList.get(i).getTotalInterferenceCost() + (nMig.get(i - 1) * migvalue))); // interference
 																														// index
 			}
+			oracleRescore(solutionList.get(solutionList.size() - 1));
 		}
 
 		// Even Scheduler
@@ -1289,6 +1435,7 @@ public class IntContainerDataCenter extends SimEntity {
 				Log.printConcatLine(util.printDouble(solutionList.get(i).getTotalInterferenceCost()));
 
 			}
+			oracleRescore(solutionList.get(solutionList.size() - 1));
 
 		}
 
@@ -1299,35 +1446,61 @@ public class IntContainerDataCenter extends SimEntity {
 			// not change
 			// this solution uses SimulatedAnnealing algorithm
 
-			// analysis interval (first)
+			// analysis interval (first) -- clamped to the trace horizon (jsa-repo-
+			// fix-brief Phase 4 follow-up). The hardcoded interval=600 assumed
+			// traces at least that long; this campaign's traces are 120 samples
+			// (total=119). An unclamped end=600 walked off the end of every
+			// Interference buffer (IndexOutOfBoundsException at getIntByLine,
+			// size=120) -- CIAPA was never reachable at runtime before this
+			// session's -Diada.approach fix, so this was never hit before.
+			//
+			// A first cut just clamped end to total, which avoided the crash but
+			// made interval 1 consume the ENTIRE horizon, leaving nothing for
+			// interval 2 -- and interval 2 is where Placement.run(..., "SA")
+			// actually invokes the SA search; interval 1 only ever calls
+			// fillInitialSolution (an unoptimized initial placement). That first
+			// cut silently reduced CIAPA to "report the RR-equivalent initial
+			// placement," never exercising the SA search CIAPA is meant to
+			// contribute as a baseline. Fixed properly here: when the trace is
+			// shorter than the designed interval, interval 1 takes a single
+			// sample (mirroring IASA's own smallest interval, {1,20} -- not an
+			// invented split ratio) so interval 2 gets essentially the whole
+			// horizon to actually search over. Traces >= 600 samples are
+			// unaffected (interval 1 stays the full 600-sample window).
 			interval = 600;
-			end += interval;
+			end = (total > interval) ? end + interval : Math.min(start + 1, total);
 
 			Log.printLine(algorithm + " Intervalo1: " + start + " - " + end);
 			solutionList.add(fillInitialSolution(start, end, interval, total));
 
 			solutionList.get(solutionList.size() - 1).print();
 
-			start += interval;
+			start = end;
 
-			// Next interval (until the end)
-			end = total;
+			// Next interval (until the end) -- guarded for the degenerate case
+			// where interval 1 already consumed the whole horizon (only possible
+			// if total <= 1 above). CIAPA's own framing ("there are only one
+			// interval to analyze data, after that the placement does not
+			// change") describes traces long enough that interval 2 is where all
+			// the actual optimization happens, which is the normal path here.
+			// EVEN's single RR placement, rather than crashing on an empty or
+			// out-of-bounds second window.
+			if (start < total) {
+				end = total;
 
-			Log.printLine(algorithm + " Intervalo3: " + start + " - " + end);
-			nextSolution = Placement.run(solutionList.get(solutionList.size() - 1), algorithm).copy();
-			solutionList.add(classifier(nextSolution, start, end, interval, total));
+				Log.printLine(algorithm + " Intervalo3: " + start + " - " + end);
+				nextSolution = Placement.run(solutionList.get(solutionList.size() - 1), algorithm).copy();
+				solutionList.add(classifier(nextSolution, start, end, interval, total));
 
-			solutionList.get(solutionList.size() - 1).print();
+				solutionList.get(solutionList.size() - 1).print();
 
-			// find out how many migrations were done
-			Log.printLine(solutionList.get(solutionList.size() - 1)
-					.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
-			nMig.add(solutionList.get(solutionList.size() - 1)
-					.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+				// find out how many migrations were done
+				Log.printLine(solutionList.get(solutionList.size() - 1)
+						.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+				nMig.add(solutionList.get(solutionList.size() - 1)
+						.getNumberOfMigrations(solutionList.get(solutionList.size() - 2)));
+			}
 
-			
-			
-			
 			Log.printLine("Algorithm: " + algorithm);
 			for (int i = 0; i < solutionList.size(); i++) {
 				// Log.printLine((i+1) + " - "+algorithm+" " +
@@ -1353,7 +1526,8 @@ public class IntContainerDataCenter extends SimEntity {
 						.printDouble(solutionList.get(i).getTotalInterferenceCost() + (nMig.get(i - 1) * migvalue))); // interference
 																														// index
 			}
-			
+			oracleRescore(solutionList.get(solutionList.size() - 1));
+
 		}
 
 		long totalTime = System.currentTimeMillis() - startT;
@@ -1371,6 +1545,7 @@ public class IntContainerDataCenter extends SimEntity {
 			IntContainerCloudlet cloudlet = cloudletList.get(i);
 
 			MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+			logClass(start, cloudlet.getCloudletId(), MLCR);
 
 			solution.updateCloudletInterferenceCost((i + 1), MLCR.getCloudletCost());
 
@@ -1386,17 +1561,35 @@ public class IntContainerDataCenter extends SimEntity {
 		Solution solution = new Solution();
 
 		List<? extends IntContainerHost> list = getVmAllocationPolicy().getContainerHostList();
+		// -Diada.debugHostCost=on (jsa-repo-fix-brief Phase 4, W2.2 zero-floor
+		// investigation): prints CloudSim's own initial per-host container
+		// count and host.getId(), so a hosts==apps run can be checked for
+		// whether the underlying allocation is genuinely 1-per-host (in
+		// which case Solution's zero-floor rule should fire) or already
+		// uneven before any SA swap ever runs (in which case the floor can
+		// never be reached, independent of anything in Solution/Placement).
+		boolean debugHostCost = "on".equalsIgnoreCase(System.getProperty("iada.debugHostCost", "off"));
+		if (debugHostCost) {
+			Log.printLine("[debugHostCost] fillInitialSolution: " + list.size() + " hosts, "
+					+ cloudletList.size() + " cloudlets total");
+		}
 		// for each host...
 		for (int i = 0; i < list.size(); i++) {
 
 			IntContainerHost host = list.get(i);
+			int nContainers = host.getVmList().get(0).getContainerList().size();
+			if (debugHostCost) {
+				Log.printLine("[debugHostCost] host index=" + i + " host.getId()=" + host.getId()
+						+ " containers=" + nContainers);
+			}
 			// for each container/cloudlet (in given VM)
-			for (int x = 0; x < host.getVmList().get(0).getContainerList().size(); x++) {
+			for (int x = 0; x < nContainers; x++) {
 				// Log.printLine(i+ " " + x);
 				IntContainer container = host.getVmList().get(0).getContainerList().get(x);
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 				solution.addCloudletToSolution(host.getId(), host.getNumberOfPes(), cloudlet.getCloudletId(),
 						container.getNumberOfPes(), MLCR.getCloudletCost());
 
@@ -1423,6 +1616,7 @@ public class IntContainerDataCenter extends SimEntity {
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 
 				hostcost += MLCR.getCloudletCost()
 						/ ((double) container.getNumberOfPes() / (double) host.getNumberOfPes());
@@ -1461,6 +1655,7 @@ public class IntContainerDataCenter extends SimEntity {
 				IntContainerCloudlet cloudlet = cloudletList.get(container.getId() - 1);
 
 				MLCR = MLC.getMLClass(cloudlet.getInterferenceMetrics(), start, end);
+				logClass(start, cloudlet.getCloudletId(), MLCR);
 				hostcost += MLCR.getCloudletCost()
 						/ ((double) container.getNumberOfPes() / (double) host.getNumberOfPes());
 				Log.printLine("Host" + host.getId() + " " + String.format("%.2f", hostcost) + " cloudlet"
